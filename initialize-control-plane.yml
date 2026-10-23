@@ -1,0 +1,98 @@
+---
+- name: Initialize the Kubernetes control plane
+  hosts: control-plane
+  become: true
+  tasks:
+    - name: Check that the kubeadm configuration is available
+      ansible.builtin.stat:
+        path: /vagrant/init.yaml
+      register: kubeadm_config
+
+    - name: Require the kubeadm configuration
+      ansible.builtin.assert:
+        that:
+          - kubeadm_config.stat.exists
+          - kubeadm_config.stat.isreg
+        fail_msg: "Expected kubeadm configuration at /vagrant/init.yaml (host file: setup-vagrant/init.yaml)."
+
+    - name: Add the control-plane endpoint to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "192.168.56.10 zk.lab"
+        state: present
+
+    - name: Initialize the control plane and upload certificates
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - init
+          - --config
+          - /vagrant/init.yaml
+          - --upload-certs
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create a worker join command
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - token
+          - create
+          - --print-join-command
+      register: kubeadm_join_command
+      no_log: true
+
+    - name: Look up the Ansible SSH user's home directory
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ ansible_user }}"
+
+    - name: Create the Ansible SSH user's kubeconfig directory
+      ansible.builtin.file:
+        path: "{{ ansible_facts['getent_passwd'][ansible_user][4] }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_facts['getent_passwd'][ansible_user][2] }}"
+        mode: "0755"
+
+    - name: Install the administrator kubeconfig for the Ansible SSH user
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ ansible_facts['getent_passwd'][ansible_user][4] }}/.kube/config"
+        remote_src: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_facts['getent_passwd'][ansible_user][2] }}"
+        mode: "0600"
+
+- name: Join worker nodes to the Kubernetes cluster
+  hosts: worker1,worker2
+  become: true
+  vars:
+    worker_node_ips:
+      worker1: 192.168.56.11
+      worker2: 192.168.56.12
+  tasks:
+    - name: Add the control-plane endpoint to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "192.168.56.10 zk.lab"
+        state: present
+
+    - name: Configure kubelet to advertise this worker's private IP
+      ansible.builtin.lineinfile:
+        path: /etc/default/kubelet
+        regexp: '^KUBELET_EXTRA_ARGS='
+        line: "KUBELET_EXTRA_ARGS=--node-ip={{ worker_node_ips[inventory_hostname] }}"
+        create: true
+        mode: "0644"
+      register: kubelet_node_ip
+
+    - name: Restart kubelet after changing the worker node IP
+      ansible.builtin.systemd_service:
+        name: kubelet
+        state: restarted
+      when: kubelet_node_ip.changed
+
+    - name: Join this worker to the cluster
+      ansible.builtin.command:
+        argv: "{{ hostvars['control-plane']['kubeadm_join_command']['stdout'].split() }}"
+        creates: /etc/kubernetes/kubelet.conf
