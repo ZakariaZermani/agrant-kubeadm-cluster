@@ -29,6 +29,12 @@ The host machine needs:
 
 The VMs use the `bento/ubuntu-24.04` box. Vagrant downloads it on the first start if it is not already available.
 
+### Host hardware
+
+The cluster consists of three VMs. The current `Vagrantfile` assigns each VM 2 GB of memory and 2 virtual CPUs, for a total allocation of 6 GB of VM memory and 6 virtual CPUs. The host also needs resources for its own operating system and VirtualBox, so **16 GB of host memory is recommended**. Hosts with less memory may struggle to run all three VMs comfortably, especially alongside other applications.
+
+Resource allocations are currently fixed in the `Vagrantfile`. To change the memory or CPU allocation, edit the `vb.memory` and `vb.cpus` values in the `config.vm.provider "virtualbox"` block before running `vagrant up`.
+
 ## Project files
 
 - `Vagrantfile` – VM definitions and provisioners
